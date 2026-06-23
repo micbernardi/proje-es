@@ -47,8 +47,11 @@ button{font-family:inherit}
 /* loaded list */
 .loaded{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 18px 22px}
 .lhead{display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px}
+.lhead-actions{display:flex;gap:8px}
 .addbtn{background:transparent;border:1px solid var(--line-strong);color:var(--navy-700);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;text-transform:none;letter-spacing:0}
 .addbtn:hover{border-color:var(--gold);color:var(--gold-deep)}
+.clearbtn{background:transparent;border:1px solid var(--line-strong);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;text-transform:none;letter-spacing:0}
+.clearbtn:hover{border-color:#E0A0A0;color:#B42318;background:#FDF3F2}
 .flist{list-style:none;margin:0 0 18px;padding:0;display:flex;flex-direction:column;gap:8px}
 .frow{display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:#FCFDFE}
 .frow .fi{width:34px;height:34px;border-radius:8px;flex:none;display:grid;place-items:center;background:var(--gold-soft);color:var(--gold-deep);border:1px solid var(--gold-edge)}
@@ -173,7 +176,7 @@ button{font-family:inherit}
 
   const T = {
     navy:"16365C", grp:"2E5496", grpfg:"FFFFFF", y2024:"7F7F7F", y2025:"595959", y2026:"BF8F00",
-    det:"D6E0F0", detfg:"1F3864", det26:"F3D88E", det26fg:"5A4A12",
+    det:"D6E0F0", detfg:"1F3864", det26:"F3D88E", det26soft:"F0E2A6", det26fg:"5A4A12",
     total:"FFF2CC", june:"FFF2CC", soft26:"FDF1D0", cmp:"FFFCF3", zebra:"F4F6F9",
     border:"BFBFBF", thick:"808080", gold:"BF8F00",
     green:"C6EFCE", greenfg:"006100", red:"FFC7CE", redfg:"9C0006",
@@ -268,10 +271,12 @@ button{font-family:inherit}
       c.alignment = { horizontal:"center", vertical:"middle", wrapText:true };
     });
     periods.forEach((p, i) => {
-      const isproj = p === p1;
+      const yr = Math.floor(p / 100), isproj = p === p1;
+      const hfill = yr === 2026 ? (isproj ? T.det26 : T.det26soft) : T.det;
+      const hfg = yr === 2026 ? T.det26fg : T.detfg;
       const c = ws.getCell(4, FMC + i); c.value = mlabel(p);
-      c.font = { name:"Calibri", size:8.5, bold:true, color:A(isproj ? T.det26fg : T.detfg) };
-      c.fill = fill(isproj ? T.det26 : T.det);
+      c.font = { name:"Calibri", size:8.5, bold:true, color:A(hfg) };
+      c.fill = fill(hfill);
       c.alignment = { horizontal:"center", vertical:"middle" };
     });
     ws.getRow(4).height = 26;
@@ -354,11 +359,23 @@ button{font-family:inherit}
 
   function colLetter(n) { let s = ""; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = (n - r - 1) / 26; } return s; }
 
+  function entityRank(entity) {
+    const e = (entity || "").toUpperCase();
+    if (e === "MARCA") return 0;
+    if (e === "CIDADE") return 1;
+    if (/PDV/.test(e)) return 2;
+    if (e === "BRICK") return 3;
+    return 9;
+  }
+
   function buildWorkbook(ExcelJSlib, analyses) {
     const wb = new ExcelJSlib.Workbook();
     wb.creator = "Painel de Projeção";
+    const ordered = analyses.slice().sort((a, b) =>
+      (entityRank(a.entity) - entityRank(b.entity)) ||
+      ((a.kind === "un" ? 0 : 1) - (b.kind === "un" ? 0 : 1)));
     const used = {};
-    analyses.forEach((a) => {
+    ordered.forEach((a) => {
       let nm = a.sheetName.slice(0, 31).replace(/[\[\]:*?/\\]/g, "");
       if (used[nm]) { let i = 2; while (used[nm + " " + i]) i++; nm = (nm.slice(0, 28) + " " + i); }
       used[nm] = true; a.sheetName = nm;
@@ -443,7 +460,10 @@ button{font-family:inherit}
     app.innerHTML = `
       <div class="loaded fade-in">
         <div class="lhead"><span>${S.files.length} arquivo${S.files.length > 1 ? "s" : ""} pronto${S.files.length > 1 ? "s" : ""}</span>
-          <button class="addbtn" id="addMore">+ adicionar</button></div>
+          <span class="lhead-actions">
+            <button class="addbtn" id="addMore">+ adicionar</button>
+            <button class="clearbtn" id="clearAll">Limpar tudo</button>
+          </span></div>
         <ul class="flist">${rows}</ul>
         <button class="download" id="dl">${dlIcon()} Baixar Excel organizado</button>
         <p class="hint2">Cada arquivo vira uma aba. Tipo (unidades / R$) e categoria são lidos do próprio arquivo; o último mês é a projeção.</p>
@@ -451,6 +471,7 @@ button{font-family:inherit}
       <div class="dropmini" id="drop">${upIcon()} arraste mais arquivos aqui</div>`;
     $("dl").onclick = download;
     $("addMore").onclick = () => $("file").click();
+    $("clearAll").onclick = () => { S.files = []; render(); toast("Planilhas removidas"); };
     app.querySelectorAll(".rm").forEach((b) => (b.onclick = () => { S.files = S.files.filter((f) => f.id !== b.dataset.id); render(); }));
     wireDrop($("drop"));
   }
