@@ -304,7 +304,7 @@ button{font-family:inherit}
 
     function writeRow(r, name, valuesOf, isTotal) {
       const nm = ws.getCell(r, 1); nm.value = isTotal ? "TOTAL GERAL" : clean(name);
-      nm.font = { name:"Calibri", size:10, bold:!!isTotal, color:A(isTotal ? "1F3864" : "000000") };
+      nm.font = { name:"Calibri", size:10, bold:true, color:A(isTotal ? "1F3864" : "000000") };
       nm.alignment = { horizontal:"left", vertical:"middle", indent:1 };
       // timeline
       periods.forEach((p, i) => {
