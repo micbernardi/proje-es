@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 :root{
   --navy-900:#0F2540; --navy-700:#1B3A5F; --navy-600:#16365C;
@@ -408,6 +409,16 @@ button{font-family:inherit}
   const S = { files: [] };
   let uid = 0;
 
+  // setor: nome curto (parte após " - ") e versão segura para nome de arquivo
+  const setorShort = (s) => s ? s.split(" - ").slice(-1)[0].trim() : "";
+  const safeName = (s) => String(s).replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ").trim().replace(/\s+/g, "_");
+  function saveBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
   function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2600); }
 
   function readMatrix(buf) {
@@ -448,25 +459,26 @@ button{font-family:inherit}
   function render() {
     const app = $("app");
     if (!S.files.length) { app.innerHTML = emptyHTML(); wireDrop($("drop")); return; }
+    const nSet = new Set(S.files.map((f) => f.setor || "—")).size;
     const rows = S.files.map((f) => `
       <li class="frow" data-id="${f.id}">
         <span class="fi">${docIcon()}</span>
         <span class="fmeta">
           <span class="fname">${esc(f.name)}</span>
-          <span class="fsub">${esc(f.entity)} ${badge(f.metric)} · ${f.items} itens · projeção ${mlabel(f.periods[f.periods.length - 1])}</span>
+          <span class="fsub">${f.setor ? '<b style="color:var(--navy-700)">' + esc(setorShort(f.setor)) + '</b>' : '<b style="color:#B42318">sem setor</b>'} · ${esc(f.entity)} ${badge(f.metric)} · ${f.items} itens · proj. ${mlabel(f.periods[f.periods.length - 1])}</span>
         </span>
         <button class="rm" data-id="${f.id}" title="Remover" aria-label="Remover ${esc(f.name)}">×</button>
       </li>`).join("");
     app.innerHTML = `
       <div class="loaded fade-in">
-        <div class="lhead"><span>${S.files.length} arquivo${S.files.length > 1 ? "s" : ""} pronto${S.files.length > 1 ? "s" : ""}</span>
+        <div class="lhead"><span>${S.files.length} arquivo${S.files.length > 1 ? "s" : ""} · ${nSet} setor${nSet > 1 ? "es" : ""}</span>
           <span class="lhead-actions">
             <button class="addbtn" id="addMore">+ adicionar</button>
             <button class="clearbtn" id="clearAll">Limpar tudo</button>
           </span></div>
         <ul class="flist">${rows}</ul>
-        <button class="download" id="dl">${dlIcon()} Baixar Excel organizado</button>
-        <p class="hint2">Cada arquivo vira uma aba. Tipo (unidades / R$) e categoria são lidos do próprio arquivo; o último mês é a projeção.</p>
+        <button class="download" id="dl">${dlIcon()} ${nSet > 1 ? "Baixar " + nSet + " setores (.zip)" : "Baixar Excel organizado"}</button>
+        <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; o último mês é a projeção.</p>
       </div>
       <div class="dropmini" id="drop">${upIcon()} arraste mais arquivos aqui</div>`;
     $("dl").onclick = download;
@@ -480,7 +492,7 @@ button{font-family:inherit}
     return `<div class="empty fade-in"><div class="drop" id="drop">
       <div class="ic">${upIcon(30)}</div>
       <h2>Solte os arquivos crus do IQVIA aqui</h2>
-      <p>Pode soltar vários de uma vez — em unidades e em R$ (PPP). A página lê tudo no seu navegador, organiza cada um numa aba e devolve o Excel formatado. Nada é enviado para fora.</p>
+      <p>Pode soltar vários de uma vez — <b>vários setores</b> e visões (unidades e R$). A página lê tudo no seu navegador, <b>agrupa por setor</b> (um arquivo por setor, cada visão numa aba) e devolve o Excel formatado — vários setores saem num <b>.zip</b>. Nada é enviado para fora.</p>
       <button class="cta" id="pick">Selecionar arquivos (.xlsx)</button>
       <div class="fmt">Lê automaticamente: <b>métrica</b> (linha 1) · <b>categoria</b> (Marca, Brick, Cidade, PDV) · <b>último mês = projeção</b></div>
     </div></div>`;
@@ -488,19 +500,40 @@ button{font-family:inherit}
 
   async function download() {
     if (!S.files.length || !window.ExcelJS) return;
-    const btn = $("dl"); btn.disabled = true; const old = btn.innerHTML; btn.textContent = "Gerando Excel…";
+    const btn = $("dl"); btn.disabled = true; const old = btn.innerHTML; btn.textContent = "Gerando…";
     try {
-      const analyses = S.files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data }));
-      const wb = XlsxBuild.buildWorkbook(window.ExcelJS, analyses);
-      const buf = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      const setor = (S.files.find((f) => f.setor) || {}).setor;
-      const short = setor ? setor.split(" - ").slice(-1)[0].trim().replace(/[^\w]+/g, "_") : "Consolidada";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = "Projecao_" + short + ".xlsx";
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-      toast("Excel gerado — " + analyses.length + " aba" + (analyses.length > 1 ? "s" : ""));
+      // agrupa os arquivos por SETOR, preservando a ordem em que os setores apareceram
+      const groups = new Map();
+      S.files.forEach((f) => {
+        const key = f.setor || "Consolidada";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(f);
+      });
+
+      // monta um workbook por setor (cada visão/arquivo vira uma aba)
+      const built = []; // { fname, buf, tabs }
+      for (const [setor, files] of groups) {
+        const analyses = files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data }));
+        const wb = XlsxBuild.buildWorkbook(window.ExcelJS, analyses);
+        const buf = await wb.xlsx.writeBuffer();
+        const nome = setor === "Consolidada" ? "Consolidada" : (safeName(setorShort(setor)) || safeName(setor));
+        built.push({ fname: "Projecao_" + nome + ".xlsx", buf, tabs: analyses.length });
+      }
+
+      const XLSXMIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+      if (built.length === 1) {
+        // um setor só: baixa o .xlsx direto, sem zip
+        saveBlob(new Blob([built[0].buf], { type: XLSXMIME }), built[0].fname);
+        toast("Excel gerado · 1 setor · " + built[0].tabs + " aba" + (built[0].tabs > 1 ? "s" : ""));
+      } else {
+        // vários setores: um arquivo por setor, empacotados num .zip
+        if (!window.JSZip) { toast("JSZip não carregou — verifique a conexão."); return; }
+        const zip = new JSZip();
+        built.forEach((b) => zip.file(b.fname, b.buf));
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        saveBlob(zipBlob, "Projecoes_" + built.length + "_setores.zip");
+        toast(built.length + " setores · " + S.files.length + " abas · .zip gerado");
+      }
     } catch (err) { console.error(err); toast("Não consegui gerar o Excel."); }
     finally { btn.disabled = false; btn.innerHTML = old; }
   }
