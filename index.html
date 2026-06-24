@@ -70,6 +70,13 @@ button{font-family:inherit}
 .download:disabled{opacity:.55;cursor:default}
 .hint2{margin:12px 2px 0;font-size:11.5px;color:var(--faint);text-align:center;line-height:1.5}
 
+.orderbar{display:flex;align-items:center;gap:12px;margin:2px 2px 14px;flex-wrap:wrap}
+.orderlbl{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.seg{display:inline-flex;background:#F1F3F7;border:1px solid var(--line-strong);border-radius:9px;padding:3px;gap:3px}
+.segbtn{appearance:none;border:none;background:transparent;color:var(--muted);font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:7px;cursor:pointer;transition:.12s}
+.segbtn:hover{color:var(--navy-700)}
+.segbtn.active{background:var(--navy-600);color:#fff;box-shadow:0 1px 2px rgba(15,37,64,.15)}
+
 .dropmini{margin-top:14px;border:1.5px dashed var(--line-strong);border-radius:12px;padding:14px;text-align:center;color:var(--faint);font-size:12.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:.15s}
 .dropmini.over{border-color:var(--gold);background:#FFFDF6;color:var(--gold-deep)}
 
@@ -221,7 +228,8 @@ button{font-family:inherit}
     const piv = {};
     items.forEach((m) => { piv[m] = {}; for (const p in data[m]) piv[m][p] = prep(data[m][p]); });
     const dlt = (m) => (piv[m][p1] || 0) - (piv[m][p0] || 0);
-    items.sort((x, y) => (dlt(y) - dlt(x)) || ((piv[y][p1] || 0) - (piv[x][p1] || 0)));
+    const gapDir = a.gapOrder === "asc" ? -1 : 1; // "asc" = piores GAPs primeiro; padrão = maiores primeiro
+    items.sort((x, y) => gapDir * (dlt(y) - dlt(x)) || ((piv[y][p1] || 0) - (piv[x][p1] || 0)));
 
     const FMC = 6;
     const pcol = (p) => FMC + periods.indexOf(p);
@@ -289,7 +297,7 @@ button{font-family:inherit}
       c.alignment = { horizontal:"center", vertical:"middle" };
       if (col === 4 || col === 5) c.font = { name:"Calibri", size:10, bold:true, color:A(isTotal ? "1F3864" : "000000") };
       else if (col === 2 || col === 3) c.font = { name:"Calibri", size:10, bold:!!isTotal, color:A(isTotal ? "1F3864" : "000000") };
-      else c.font = { name:"Calibri", size:9.5, bold:!!isTotal, color:A(isTotal ? "1F3864" : "000000") };
+      else c.font = { name:"Calibri", size:9.5, bold:(isTotal || col === pcol(p1) || col === pcol(p0)), color:A(isTotal ? "1F3864" : "000000") };
       const zebra = !isTotal && ((r - DATA0) % 2 === 1);
       if (isTotal) c.fill = fill(T.total);
       else if (col === 2 || col === 3 || col === pcol(p1)) c.fill = fill(T.june);
@@ -406,7 +414,7 @@ button{font-family:inherit}
   const mlabel = (p) => p == null ? "—" : MES[(p % 100) - 1] + "/" + String(Math.floor(p / 100)).slice(2);
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[m]));
-  const S = { files: [] };
+  const S = { files: [], gapOrder: "desc" };
   let uid = 0;
 
   // setor: nome curto (parte após " - ") e versão segura para nome de arquivo
@@ -477,6 +485,13 @@ button{font-family:inherit}
             <button class="clearbtn" id="clearAll">Limpar tudo</button>
           </span></div>
         <ul class="flist">${rows}</ul>
+        <div class="orderbar">
+          <span class="orderlbl">Ordem por GAP</span>
+          <div class="seg" role="group" aria-label="Ordem por GAP">
+            <button type="button" class="segbtn${S.gapOrder === "desc" ? " active" : ""}" data-order="desc">Maiores primeiro</button>
+            <button type="button" class="segbtn${S.gapOrder === "asc" ? " active" : ""}" data-order="asc">Piores primeiro</button>
+          </div>
+        </div>
         <button class="download" id="dl">${dlIcon()} ${nSet > 1 ? "Baixar " + nSet + " setores (.zip)" : "Baixar Excel organizado"}</button>
         <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; o último mês é a projeção.</p>
       </div>
@@ -484,6 +499,7 @@ button{font-family:inherit}
     $("dl").onclick = download;
     $("addMore").onclick = () => $("file").click();
     $("clearAll").onclick = () => { S.files = []; render(); toast("Planilhas removidas"); };
+    app.querySelectorAll(".segbtn").forEach((b) => (b.onclick = () => { if (S.gapOrder !== b.dataset.order) { S.gapOrder = b.dataset.order; render(); } }));
     app.querySelectorAll(".rm").forEach((b) => (b.onclick = () => { S.files = S.files.filter((f) => f.id !== b.dataset.id); render(); }));
     wireDrop($("drop"));
   }
@@ -513,7 +529,7 @@ button{font-family:inherit}
       // monta um workbook por setor (cada visão/arquivo vira uma aba)
       const built = []; // { fname, buf, tabs }
       for (const [setor, files] of groups) {
-        const analyses = files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data }));
+        const analyses = files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data, gapOrder: S.gapOrder }));
         const wb = XlsxBuild.buildWorkbook(window.ExcelJS, analyses);
         const buf = await wb.xlsx.writeBuffer();
         const nome = setor === "Consolidada" ? "Consolidada" : (safeName(setorShort(setor)) || safeName(setor));
