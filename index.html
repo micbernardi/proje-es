@@ -237,17 +237,38 @@ button{font-family:inherit}
     const j0 = colLetter(pcol(p0)), j1 = colLetter(pcol(p1));
     const TOTAL = 5, DATA0 = 6, DATA1 = DATA0 + items.length - 1;
     const june = new Set([pcol(p0), pcol(p1)]);
+
+    // ---- colunas extras (opcional): YTD projetado e Trimestre projetado ----
+    // espelham a planilha manual: Evol. YTD (26 vs 25) | Dif. YTD (R$) | Evol. TRI (26 vs 25).
+    // o mês projetado (p1) entra no acumulado, por isso a leitura "projetado".
+    const extra = !!a.extraCols;
+    const prevMonth = (p) => (p % 100 === 1 ? (Math.floor(p / 100) - 1) * 100 + 12 : p - 1);
+    const yProj = Math.floor(p1 / 100), mProj = p1 % 100;
+    const ytdCur = periods.filter((p) => Math.floor(p / 100) === yProj && (p % 100) <= mProj);
+    const ytdPri = periods.filter((p) => Math.floor(p / 100) === yProj - 1 && (p % 100) <= mProj);
+    const triSet = [p1, prevMonth(p1), prevMonth(prevMonth(p1))];
+    const triCur = periods.filter((p) => triSet.includes(p));
+    const triPri = periods.filter((p) => triSet.map((x) => x - 100).includes(p));
+    const canYTD = extra && ytdCur.length > 0 && ytdPri.length > 0;
+    const canTRI = extra && triCur.length > 0 && triPri.length > 0;
+    const XC = {}; let xc = LAST;
+    if (canYTD) { XC.ytd = ++xc; XC.dif = ++xc; }
+    if (canTRI) { XC.tri = ++xc; }
+    const ENDCOL = xc; // borda direita da planilha (com ou sem extras)
+    // SUM de faixa contígua de colunas (subconjunto ordenado de periods); @ = número da linha
+    const sumR = (arr) => "SUM(" + colLetter(pcol(arr[0])) + "@:" + colLetter(pcol(arr[arr.length - 1])) + "@)";
+    const sumV = (arr, valOf) => arr.reduce((s, p) => s + (valOf(p) || 0), 0);
     const entHead = /PDV/i.test(a.entity) ? "PDV" : a.entity;
     const setorShort = a.setor ? (a.setor.split(" - ").slice(-1)[0].trim()) : "";
 
     // row 1 title
-    ws.mergeCells(1, 1, 1, LAST);
+    ws.mergeCells(1, 1, 1, ENDCOL);
     const t = ws.getCell(1, 1);
     t.value = "PROJEÇÃO — " + entHead.toUpperCase() + " (" + metricLbl + ")" + (setorShort ? " — " + setorShort : "");
     t.font = { name:"Calibri", size:15, bold:true, color:A("FFFFFF") }; t.fill = fill(T.navy);
     t.alignment = { horizontal:"left", vertical:"middle", indent:1 }; ws.getRow(1).height = 26;
     // row 2 subtitle
-    ws.mergeCells(2, 1, 2, LAST);
+    ws.mergeCells(2, 1, 2, ENDCOL);
     const s = ws.getCell(2, 1);
     s.value = cap(mfull(p1).toLowerCase()) + " = projeção  •  demais meses = realizado  •  valores em " + metricSub +
               "   |   Dif. e Var. % comparam " + mlabel(p1) + " vs " + mlabel(p0) + ":  verde = projeta mais, vermelho = menos";
@@ -288,6 +309,22 @@ button{font-family:inherit}
       c.fill = fill(hfill);
       c.alignment = { horizontal:"center", vertical:"middle" };
     });
+    // cabeçalho das colunas extras: banda de grupo (linha 3) + rótulos (linha 4)
+    if (extra && ENDCOL > LAST) {
+      if (ENDCOL > LAST + 1) ws.mergeCells(3, LAST + 1, 3, ENDCOL);
+      const gh = ws.getCell(3, LAST + 1);
+      gh.value = "PROJETADO — " + (yProj % 100) + " vs " + ((yProj - 1) % 100);
+      gh.font = { name:"Calibri", size:10, bold:true, color:A("FFFFFF") }; gh.fill = fill(T.navy);
+      gh.alignment = { horizontal:"center", vertical:"middle" };
+      const mUp = mlabel(p1).toUpperCase();
+      const xhead = (col, txt) => {
+        const c = ws.getCell(4, col); c.value = txt;
+        c.font = { name:"Calibri", size:8.5, bold:true, color:A("FFFFFF") }; c.fill = fill(T.grp);
+        c.alignment = { horizontal:"center", vertical:"middle", wrapText:true };
+      };
+      if (canYTD) { xhead(XC.ytd, "Evol. YTD\n" + mUp); xhead(XC.dif, "Dif. YTD\n(" + unit + ")"); }
+      if (canTRI) { xhead(XC.tri, "Evol. TRI\n" + mUp); }
+    }
     ws.getRow(4).height = 26;
 
     function sumAt(p) { let s = 0; items.forEach((m) => { if (piv[m][p] != null) s += piv[m][p]; }); return s; }
@@ -336,6 +373,24 @@ button{font-family:inherit}
       const ec = ws.getCell(r, 5); ec.numFmt = PCT; ec.alignment = { horizontal:"center", vertical:"middle" };
       if (vp == null) { ec.value = { formula: 'IFERROR((C' + r + '-B' + r + ')/B' + r + ',"")', result: "" }; ec.font = { name:"Calibri", size:10, bold:true, color:A("5B6573") }; ec.fill = fill("EEF1F5"); }
       else { ec.value = { formula: 'IFERROR((C' + r + '-B' + r + ')/B' + r + ',"")', result: vp }; paintDelta(ec, vp); }
+      // colunas extras: YTD e Trimestre projetados
+      if (extra) {
+        const evolCell = (col, curArr, priArr) => {
+          const cS = sumV(curArr, valuesOf), pS = sumV(priArr, valuesOf), ev = pS > 0 ? cS / pS - 1 : null;
+          const c = ws.getCell(r, col); c.numFmt = PCT; c.alignment = { horizontal:"center", vertical:"middle" };
+          c.value = { formula: 'IFERROR(' + sumR(curArr).replace(/@/g, r) + '/' + sumR(priArr).replace(/@/g, r) + '-1,"")', result: ev == null ? "" : ev };
+          if (ev == null) { c.font = { name:"Calibri", size:10, bold:true, color:A("5B6573") }; c.fill = fill("EEF1F5"); }
+          else paintDelta(c, ev);
+        };
+        if (canYTD) {
+          evolCell(XC.ytd, ytdCur, ytdPri);
+          const cS = sumV(ytdCur, valuesOf), pS = sumV(ytdPri, valuesOf), dv = cS - pS;
+          const dc2 = ws.getCell(r, XC.dif); dc2.numFmt = DLT; dc2.alignment = { horizontal:"center", vertical:"middle" };
+          dc2.value = { formula: sumR(ytdCur).replace(/@/g, r) + '-' + sumR(ytdPri).replace(/@/g, r), result: dv };
+          paintDelta(dc2, dv);
+        }
+        if (canTRI) evolCell(XC.tri, triCur, triPri);
+      }
     }
 
     // TOTAL row then data rows
@@ -343,11 +398,13 @@ button{font-family:inherit}
     items.forEach((m, k) => { const r = DATA0 + k; writeRow(r, m, (p) => (piv[m][p] != null ? piv[m][p] : null), false); });
 
     // borders
-    for (let r = 3; r <= DATA1; r++) for (let col = 1; col <= LAST; col++) ws.getCell(r, col).border = { top:thin, left:thin, bottom:thin, right:thin };
+    for (let r = 3; r <= DATA1; r++) for (let col = 1; col <= ENDCOL; col++) ws.getCell(r, col).border = { top:thin, left:thin, bottom:thin, right:thin };
     for (let r = 1; r <= DATA1; r++) mergeBorder(ws.getCell(r, 5), { right: med });
     june.forEach((jc) => { for (let r = 3; r <= DATA1; r++) mergeBorder(ws.getCell(r, jc), { left:goldMed, right:goldMed }); });
-    for (let col = 1; col <= LAST; col++) { mergeBorder(ws.getCell(4, col), { bottom: med }); mergeBorder(ws.getCell(TOTAL, col), { top:med, bottom:med }); }
+    for (let col = 1; col <= ENDCOL; col++) { mergeBorder(ws.getCell(4, col), { bottom: med }); mergeBorder(ws.getCell(TOTAL, col), { top:med, bottom:med }); }
     for (let r = 3; r <= DATA1; r++) mergeBorder(ws.getCell(r, 1), { left: med });
+    // separador grosso à esquerda do bloco projetado e borda direita da planilha
+    if (extra && ENDCOL > LAST) for (let r = 1; r <= DATA1; r++) { mergeBorder(ws.getCell(r, LAST + 1), { left: med }); mergeBorder(ws.getCell(r, ENDCOL), { right: med }); }
 
     // widths
     let maxName = 20; items.forEach((m) => { maxName = Math.max(maxName, clean(m).length); });
@@ -356,12 +413,19 @@ button{font-family:inherit}
     else { ws.getColumn(2).width = 15; ws.getColumn(3).width = 15; ws.getColumn(4).width = 15; ws.getColumn(5).width = 10; }
     const mw = isUn ? 7 : 14.5;
     periods.forEach((p, i) => { ws.getColumn(FMC + i).width = mw; });
+    if (canYTD) { ws.getColumn(XC.ytd).width = 11; ws.getColumn(XC.dif).width = isUn ? 11 : 15; }
+    if (canTRI) { ws.getColumn(XC.tri).width = 11; }
 
     // footnote
     const nr = DATA1 + 2;
     const fn = ws.getCell(nr, 1);
     fn.value = "Obs.: itens sem " + mlabel(p1) + " aparecem como 0 (Var. -100%) e sem " + mlabel(p0) +
-               " aparecem como 0 (Var. em branco). Métrica e tipo lidos do cabeçalho do arquivo cru.";
+               " aparecem como 0 (Var. em branco). Métrica e tipo lidos do cabeçalho do arquivo cru." +
+               (extra && ENDCOL > LAST
+                 ? "  Bloco PROJETADO: Evol. YTD compara jan a " + mlabel(p1) + " de " + yProj + " vs " + (yProj - 1) +
+                   "; Dif. YTD é o acumulado em " + unit + "; Evol. TRI compara os 3 meses até " + mlabel(p1) +
+                   " de " + yProj + " vs " + (yProj - 1) + " (o mês projetado entra no acumulado)."
+                 : "");
     fn.font = { name:"Calibri", size:8.5, italic:true, color:A("808080") };
     return { sheet: a.sheetName, items: items.length, p0, p1 };
   }
@@ -414,7 +478,7 @@ button{font-family:inherit}
   const mlabel = (p) => p == null ? "—" : MES[(p % 100) - 1] + "/" + String(Math.floor(p / 100)).slice(2);
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[m]));
-  const S = { files: [], gapOrder: "desc" };
+  const S = { files: [], gapOrder: "desc", colView: "month" };
   let uid = 0;
 
   // setor: nome curto (parte após " - ") e versão segura para nome de arquivo
@@ -492,6 +556,13 @@ button{font-family:inherit}
             <button type="button" class="segbtn${S.gapOrder === "asc" ? " active" : ""}" data-order="asc">Piores primeiro</button>
           </div>
         </div>
+        <div class="orderbar">
+          <span class="orderlbl">Colunas</span>
+          <div class="seg" role="group" aria-label="Colunas do arquivo">
+            <button type="button" class="segbtn${S.colView === "month" ? " active" : ""}" data-cols="month">Só o mês</button>
+            <button type="button" class="segbtn${S.colView === "full" ? " active" : ""}" data-cols="full">Mês + YTD + Trimestre</button>
+          </div>
+        </div>
         <button class="download" id="dl">${dlIcon()} ${nSet > 1 ? "Baixar " + nSet + " setores (.zip)" : "Baixar Excel organizado"}</button>
         <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; o último mês é a projeção.</p>
       </div>
@@ -499,7 +570,8 @@ button{font-family:inherit}
     $("dl").onclick = download;
     $("addMore").onclick = () => $("file").click();
     $("clearAll").onclick = () => { S.files = []; render(); toast("Planilhas removidas"); };
-    app.querySelectorAll(".segbtn").forEach((b) => (b.onclick = () => { if (S.gapOrder !== b.dataset.order) { S.gapOrder = b.dataset.order; render(); } }));
+    app.querySelectorAll(".segbtn[data-order]").forEach((b) => (b.onclick = () => { if (S.gapOrder !== b.dataset.order) { S.gapOrder = b.dataset.order; render(); } }));
+    app.querySelectorAll(".segbtn[data-cols]").forEach((b) => (b.onclick = () => { if (S.colView !== b.dataset.cols) { S.colView = b.dataset.cols; render(); } }));
     app.querySelectorAll(".rm").forEach((b) => (b.onclick = () => { S.files = S.files.filter((f) => f.id !== b.dataset.id); render(); }));
     wireDrop($("drop"));
   }
@@ -529,7 +601,7 @@ button{font-family:inherit}
       // monta um workbook por setor (cada visão/arquivo vira uma aba)
       const built = []; // { fname, buf, tabs }
       for (const [setor, files] of groups) {
-        const analyses = files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data, gapOrder: S.gapOrder }));
+        const analyses = files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data, gapOrder: S.gapOrder, extraCols: S.colView === "full" }));
         const wb = XlsxBuild.buildWorkbook(window.ExcelJS, analyses);
         const buf = await wb.xlsx.writeBuffer();
         const nome = setor === "Consolidada" ? "Consolidada" : (safeName(setorShort(setor)) || safeName(setor));
