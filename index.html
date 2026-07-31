@@ -179,6 +179,9 @@ button{font-family:inherit}
   const mfull  = (p) => MESF[(p % 100) - 1] + "/" + String(Math.floor(p / 100)).slice(2);
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   const clean = (s) => String(s).replace(/\s*\(SP0\)\s*$/i, "").trim();
+  // marcas excluíveis via seletor da UI (NIMEGON, NIMEGON MET, HIXIZINE e variações)
+  const EXCL_LBL = "NIMEGON / NIMEGON MET / HIXIZINE";
+  const isExclBrand = (s) => /^(NIMEGON|HIXIZINE)\b/.test(clean(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase());
   const A = (hex) => ({ argb: "FF" + hex });
   const fill = (hex) => ({ type: "pattern", pattern: "solid", fgColor: A(hex) });
 
@@ -214,6 +217,8 @@ button{font-family:inherit}
     const periods = a.periods.filter((p) => Math.floor(p / 100) >= 2025), data = a.data, kind = a.kind;
     const ws = wb.addWorksheet(a.sheetName, { views: [{ state:"frozen", xSplit:5, ySplit:5, showGridLines:false }] });
     let items = Object.keys(data);
+    const excl = !!a.exclBrands && items.some(isExclBrand) && items.some((m) => !isExclBrand(m));
+    if (excl) items = items.filter((m) => !isExclBrand(m));
     const { p0, p1 } = defaultPeriods(periods);
 
     const isUn = kind === "un";
@@ -271,7 +276,8 @@ button{font-family:inherit}
     ws.mergeCells(2, 1, 2, ENDCOL);
     const s = ws.getCell(2, 1);
     s.value = cap(mfull(p1).toLowerCase()) + " = projeção  •  demais meses = realizado  •  valores em " + metricSub +
-              "   |   Dif. e Var. % comparam " + mlabel(p1) + " vs " + mlabel(p0) + ":  verde = projeta mais, vermelho = menos";
+              "   |   Dif. e Var. % comparam " + mlabel(p1) + " vs " + mlabel(p0) + ":  verde = projeta mais, vermelho = menos" +
+              (excl ? "   |   SEM " + EXCL_LBL : "");
     s.font = { name:"Calibri", size:9, italic:true, color:A("404040") };
     s.alignment = { horizontal:"left", vertical:"middle", indent:1 }; ws.getRow(2).height = 16;
     // row 3 group + entity
@@ -421,6 +427,7 @@ button{font-family:inherit}
     const fn = ws.getCell(nr, 1);
     fn.value = "Obs.: itens sem " + mlabel(p1) + " aparecem como 0 (Var. -100%) e sem " + mlabel(p0) +
                " aparecem como 0 (Var. em branco). Métrica e tipo lidos do cabeçalho do arquivo cru." +
+               (excl ? "  Marcas excluídas dos cálculos: " + EXCL_LBL + "." : "") +
                (extra && ENDCOL > LAST
                  ? "  Bloco PROJETADO: Evol. YTD compara jan a " + mlabel(p1) + " de " + yProj + " vs " + (yProj - 1) +
                    "; Dif. YTD é o acumulado em " + unit + "; Evol. TRI compara os 3 meses até " + mlabel(p1) +
@@ -478,7 +485,7 @@ button{font-family:inherit}
   const mlabel = (p) => p == null ? "—" : MES[(p % 100) - 1] + "/" + String(Math.floor(p / 100)).slice(2);
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[m]));
-  const S = { files: [], gapOrder: "desc", colView: "month" };
+  const S = { files: [], gapOrder: "desc", colView: "month", brands: "all" }; // brands: "all" | "excl" (sem NIMEGON/NIMEGON MET/HIXIZINE)
   let uid = 0;
 
   // setor: nome curto (parte após " - ") e versão segura para nome de arquivo
@@ -563,6 +570,13 @@ button{font-family:inherit}
             <button type="button" class="segbtn${S.colView === "full" ? " active" : ""}" data-cols="full">Mês + YTD + Trimestre</button>
           </div>
         </div>
+        <div class="orderbar">
+          <span class="orderlbl">Marcas</span>
+          <div class="seg" role="group" aria-label="Filtro de marcas">
+            <button type="button" class="segbtn${S.brands === "all" ? " active" : ""}" data-brands="all">Todas as marcas</button>
+            <button type="button" class="segbtn${S.brands === "excl" ? " active" : ""}" data-brands="excl">Sem NIMEGON / NIMEGON MET / HIXIZINE</button>
+          </div>
+        </div>
         <button class="download" id="dl">${dlIcon()} ${nSet > 1 ? "Baixar " + nSet + " setores (.zip)" : "Baixar Excel organizado"}</button>
         <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; o último mês é a projeção.</p>
       </div>
@@ -572,6 +586,7 @@ button{font-family:inherit}
     $("clearAll").onclick = () => { S.files = []; render(); toast("Planilhas removidas"); };
     app.querySelectorAll(".segbtn[data-order]").forEach((b) => (b.onclick = () => { if (S.gapOrder !== b.dataset.order) { S.gapOrder = b.dataset.order; render(); } }));
     app.querySelectorAll(".segbtn[data-cols]").forEach((b) => (b.onclick = () => { if (S.colView !== b.dataset.cols) { S.colView = b.dataset.cols; render(); } }));
+    app.querySelectorAll(".segbtn[data-brands]").forEach((b) => (b.onclick = () => { if (S.brands !== b.dataset.brands) { S.brands = b.dataset.brands; render(); } }));
     app.querySelectorAll(".rm").forEach((b) => (b.onclick = () => { S.files = S.files.filter((f) => f.id !== b.dataset.id); render(); }));
     wireDrop($("drop"));
   }
@@ -601,11 +616,12 @@ button{font-family:inherit}
       // monta um workbook por setor (cada visão/arquivo vira uma aba)
       const built = []; // { fname, buf, tabs }
       for (const [setor, files] of groups) {
-        const analyses = files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data, gapOrder: S.gapOrder, extraCols: S.colView === "full" }));
+        const analyses = files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data, gapOrder: S.gapOrder, extraCols: S.colView === "full", exclBrands: S.brands === "excl" }));
         const wb = XlsxBuild.buildWorkbook(window.ExcelJS, analyses);
         const buf = await wb.xlsx.writeBuffer();
         const nome = setor === "Consolidada" ? "Consolidada" : (safeName(setorShort(setor)) || safeName(setor));
-        built.push({ fname: "Projecao_" + nome + ".xlsx", buf, tabs: analyses.length });
+        const sufixo = S.brands === "excl" ? "_sem_NIM_HIX" : "";
+        built.push({ fname: "Projecao_" + nome + sufixo + ".xlsx", buf, tabs: analyses.length });
       }
 
       const XLSXMIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
