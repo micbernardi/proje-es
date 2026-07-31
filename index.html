@@ -423,11 +423,17 @@ button{font-family:inherit}
     if (canTRI) { ws.getColumn(XC.tri).width = 11; }
 
     // footnote
+    // autofiltro nativo do Excel nas abas de localização (PDV / Brick / Cidade):
+    // seta na linha 4 permite digitar nome ou CNPJ na busca do filtro da coluna A
+    if (/PDV|BRICK|CIDADE/i.test(a.entity) && items.length) {
+      ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: DATA1, column: ENDCOL } };
+    }
     const nr = DATA1 + 2;
     const fn = ws.getCell(nr, 1);
     fn.value = "Obs.: itens sem " + mlabel(p1) + " aparecem como 0 (Var. -100%) e sem " + mlabel(p0) +
                " aparecem como 0 (Var. em branco). Métrica e tipo lidos do cabeçalho do arquivo cru." +
                (excl ? "  Marcas excluídas dos cálculos: " + EXCL_LBL + "." : "") +
+               (ws.autoFilter ? "  Filtro: use a seta na coluna " + entHead + " (linha 4) e digite nome ou CNPJ na busca; ao filtrar, a linha TOTAL GERAL fica oculta até limpar o filtro." : "") +
                (extra && ENDCOL > LAST
                  ? "  Bloco PROJETADO: Evol. YTD compara jan a " + mlabel(p1) + " de " + yProj + " vs " + (yProj - 1) +
                    "; Dif. YTD é o acumulado em " + unit + "; Evol. TRI compara os 3 meses até " + mlabel(p1) +
