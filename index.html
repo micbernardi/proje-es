@@ -464,13 +464,189 @@ button{font-family:inherit}
     return 9;
   }
 
-  function buildWorkbook(ExcelJSlib, analyses) {
+  /* Aba "Destaques" (opcional): por visão (Marcas, Cidades, Bricks), lista os itens que
+     explicam 75% do incremento total (corte de importância, estilo curva A) e os 10 maiores
+     déficits, no mês (p1 vs p0) e no YTD projetado, sempre com a participação no total. */
+  function buildDestaques(wb, analyses) {
+    const PARETO = 0.75; // corte de importância: itens que somados explicam 75% do incremento
+    const TOPN = 10;     // maiores déficits
+    const entLbls = { MARCA: "MARCAS", CIDADE: "CIDADES", BRICK: "BRICKS" };
+    const pick = analyses.filter((a) => entLbls[String(a.entity || "").trim().toUpperCase()]);
+    if (!pick.length) return null;
+    const ordered = pick.slice().sort((a, b) =>
+      (entityRank(a.entity) - entityRank(b.entity)) ||
+      ((a.kind === "un" ? 0 : 1) - (b.kind === "un" ? 0 : 1)));
+    const ws = wb.addWorksheet("Destaques", { views: [{ showGridLines: false }] });
+    const W = 7, LC = 1, RC = 9, ENDC = RC + W - 1; // dois blocos lado a lado: A-G e I-O
+    [4, 34, 14, 14, 14, 9, 9, 2, 4, 34, 14, 14, 14, 9, 9].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+    const paint = (c, val) => {
+      const f = val > 0 ? T.green : val < 0 ? T.red : "EEF1F5";
+      const fg = val > 0 ? T.greenfg : val < 0 ? T.redfg : "5B6573";
+      c.font = { name: "Calibri", size: 9.5, bold: true, color: A(fg) }; c.fill = fill(f);
+    };
+    const setorSh = (() => { const s = ordered[0].setor; return s ? s.split(" - ").slice(-1)[0].trim() : ""; })();
+
+    let row = 1;
+    ws.mergeCells(row, 1, row, ENDC);
+    const t = ws.getCell(row, 1);
+    t.value = "DESTAQUES — ITENS QUE EXPLICAM " + Math.round(PARETO * 100) + "% DO INCREMENTO E MAIORES DÉFICITS" + (setorSh ? " — " + setorSh : "");
+    t.font = { name: "Calibri", size: 15, bold: true, color: A("FFFFFF") }; t.fill = fill(T.navy);
+    t.alignment = { horizontal: "left", vertical: "middle", indent: 1 }; ws.getRow(row).height = 26;
+    row += 2;
+
+    ordered.forEach((a) => {
+      const periods = a.periods.filter((p) => Math.floor(p / 100) >= 2025);
+      if (periods.length < 2) return;
+      const { p0, p1 } = defaultPeriods(periods);
+      const isUn = a.kind === "un";
+      const prep = isUn ? (v) => Math.floor(v + 0.5) : (v) => Math.round(v * 100) / 100;
+      const VAL = isUn ? "#,##0" : '"R$" #,##0.00';
+      const DLT = isUn ? "+#,##0;-#,##0;0" : '"R$" +#,##0.00;"R$" -#,##0.00;0';
+      const PCT = "+0.0%;-0.0%;0.0%";
+      const entKey = String(a.entity || "").trim().toUpperCase();
+      const entLbl = entLbls[entKey];
+      const entHead = entKey === "MARCA" ? "Marca" : entKey === "CIDADE" ? "Cidade" : "Brick";
+      // mesmas exclusões de marcas da aba principal
+      let items = Object.keys(a.data);
+      const groups = (Array.isArray(a.exclGroups) ? a.exclGroups : (a.exclBrands ? ["nim", "hix"] : [])).filter((g) => EXCL_GROUPS[g]);
+      const isExcl = (s) => groups.some((g) => EXCL_GROUPS[g].re.test(normBrand(s)));
+      if (groups.length && items.some((m) => !isExcl(m))) items = items.filter((m) => !isExcl(m));
+      const piv = {};
+      items.forEach((m) => { piv[m] = {}; for (const p in a.data[m]) piv[m][p] = prep(a.data[m][p]); });
+      const yProj = Math.floor(p1 / 100), mProj = p1 % 100;
+      const ytdCur = periods.filter((p) => Math.floor(p / 100) === yProj && (p % 100) <= mProj);
+      const ytdPri = periods.filter((p) => Math.floor(p / 100) === yProj - 1 && (p % 100) <= mProj);
+      const hasYTD = ytdCur.length > 0 && ytdPri.length > 0;
+      const sumArr = (m, arr) => arr.reduce((s, p) => s + (piv[m][p] || 0), 0);
+      const stats = items.map((m) => {
+        const v0 = piv[m][p0] || 0, v1 = piv[m][p1] || 0;
+        const yc = hasYTD ? sumArr(m, ytdCur) : 0, yp = hasYTD ? sumArr(m, ytdPri) : 0;
+        return { m, v0, v1, dM: v1 - v0, vM: v0 > 0 ? (v1 - v0) / v0 : null, yc, yp, dY: yc - yp, vY: yp > 0 ? (yc - yp) / yp : null };
+      });
+      // corte Pareto: ordena pela Dif. absoluta e acumula até somar 75% do incremento total.
+      // base pequena com % alto só entra se a Dif. dela pesar de verdade no resultado.
+      const paretoCut = (key) => {
+        const pos = stats.filter((s) => s[key] > 0).sort((x, y) => y[key] - x[key]);
+        const tot = pos.reduce((sm, i) => sm + i[key], 0);
+        if (tot <= 0) return { list: [], tot: 0 };
+        let cum = 0; const list = [];
+        for (const s of pos) { list.push(s); cum += s[key]; if (cum / tot >= PARETO) break; }
+        return { list, tot };
+      };
+      const gM = paretoCut("dM");
+      const gY = hasYTD ? paretoCut("dY") : { list: [], tot: 0 };
+      const negM = stats.filter((s) => s.dM < 0).sort((x, y) => (x.dM - y.dM));
+      const negY = hasYTD ? stats.filter((s) => s.dY < 0).sort((x, y) => (x.dY - y.dY)) : [];
+      const negTotM = negM.reduce((sm, s) => sm - s.dM, 0);
+      const negTotY = negY.reduce((sm, s) => sm - s.dY, 0);
+      const defM = negM.slice(0, TOPN);
+      const defY = negY.slice(0, TOPN);
+      const mesLbl = mlabel(p1) + " vs " + mlabel(p0);
+      const ytdLbl = "jan a " + MES[mProj - 1] + " de " + yProj + " vs " + (yProj - 1);
+
+      // banda da seção
+      ws.mergeCells(row, 1, row, ENDC);
+      const sb = ws.getCell(row, 1);
+      sb.value = entLbl + " — " + (isUn ? "UNIDADES" : "R$ (PPP)");
+      sb.font = { name: "Calibri", size: 10.5, bold: true, color: A(T.grpfg) }; sb.fill = fill(T.grp);
+      sb.alignment = { horizontal: "left", vertical: "middle", indent: 1 }; ws.getRow(row).height = 18;
+      row++;
+      ws.mergeCells(row, 1, row, ENDC);
+      const ss = ws.getCell(row, 1);
+      ss.value = "Mês: " + mesLbl + " (" + mlabel(p1) + " = projeção)" + (hasYTD ? "   |   YTD: " + ytdLbl + " (mês projetado entra no acumulado)" : "") + "   |   % do Total = peso do item no incremento (ou déficit) somado";
+      ss.font = { name: "Calibri", size: 8.5, italic: true, color: A("404040") };
+      ss.alignment = { horizontal: "left", vertical: "middle", indent: 1 };
+      row++;
+
+      // um bloco (título + cabeçalho + linhas); retorna a próxima linha livre
+      const block = (r0, c0, title, tone, rowsArr, l0, l1, fV0, fV1, fD, fVar, fShare) => {
+        ws.mergeCells(r0, c0, r0, c0 + W - 1);
+        const bt = ws.getCell(r0, c0); bt.value = title;
+        bt.font = { name: "Calibri", size: 9.5, bold: true, color: A(tone.fg) }; bt.fill = fill(tone.bg);
+        bt.alignment = { horizontal: "left", vertical: "middle", indent: 1 };
+        ["#", entHead, l0, l1, "Dif.", "Var. %", "% do\nTotal"].forEach((h, i) => {
+          const c = ws.getCell(r0 + 1, c0 + i); c.value = h;
+          c.font = { name: "Calibri", size: 8.5, bold: true, color: A(T.detfg) }; c.fill = fill(T.det);
+          c.alignment = { horizontal: i === 1 ? "left" : "center", vertical: "middle", indent: i === 1 ? 1 : 0, wrapText: true };
+        });
+        let end;
+        if (!rowsArr.length) {
+          ws.mergeCells(r0 + 2, c0, r0 + 2, c0 + W - 1);
+          const c = ws.getCell(r0 + 2, c0); c.value = "nenhum item no critério";
+          c.font = { name: "Calibri", size: 9, italic: true, color: A("808080") };
+          c.alignment = { horizontal: "center", vertical: "middle" };
+          end = r0 + 2;
+        } else {
+          rowsArr.forEach((s, i) => {
+            const r = r0 + 2 + i, zebra = i % 2 === 1;
+            const put = (col, v, fmt, alignL) => {
+              const c = ws.getCell(r, c0 + col); c.value = v; if (fmt) c.numFmt = fmt;
+              c.font = { name: "Calibri", size: 9.5, color: A("000000") };
+              c.alignment = { horizontal: alignL ? "left" : "center", vertical: "middle", indent: alignL ? 1 : 0 };
+              if (zebra) c.fill = fill(T.zebra);
+              return c;
+            };
+            put(0, i + 1);
+            put(1, clean(s.m), null, true).font = { name: "Calibri", size: 9.5, bold: true, color: A("000000") };
+            put(2, fV0(s), VAL); put(3, fV1(s), VAL);
+            paint(put(4, fD(s), DLT), fD(s));
+            paint(put(5, fVar(s), PCT), fVar(s));
+            const sh = put(6, fShare(s), "0.0%");
+            sh.font = { name: "Calibri", size: 9.5, bold: true, color: A("1F3864") };
+          });
+          end = r0 + 1 + rowsArr.length + 1;
+        }
+        for (let r = r0; r <= end; r++) for (let c = c0; c < c0 + W; c++) ws.getCell(r, c).border = { top: thin, left: thin, bottom: thin, right: thin };
+        for (let c = c0; c < c0 + W; c++) mergeBorder(ws.getCell(r0 + 1, c), { bottom: med });
+        return end + 1;
+      };
+      const gTone = { bg: T.green, fg: T.greenfg }, dTone = { bg: T.red, fg: T.redfg };
+      const noYTD = (r0, c0, title, tone) => {
+        ws.mergeCells(r0, c0, r0, c0 + W - 1);
+        const bt = ws.getCell(r0, c0); bt.value = title;
+        bt.font = { name: "Calibri", size: 9.5, bold: true, color: A(tone.fg) }; bt.fill = fill(tone.bg);
+        bt.alignment = { horizontal: "left", vertical: "middle", indent: 1 };
+        ws.mergeCells(r0 + 1, c0, r0 + 1, c0 + W - 1);
+        const c = ws.getCell(r0 + 1, c0); c.value = "sem base do ano anterior para o YTD";
+        c.font = { name: "Calibri", size: 9, italic: true, color: A("808080") };
+        c.alignment = { horizontal: "center", vertical: "middle" };
+        for (let r = r0; r <= r0 + 1; r++) for (let cc = c0; cc < c0 + W; cc++) ws.getCell(r, cc).border = { top: thin, left: thin, bottom: thin, right: thin };
+        return r0 + 2;
+      };
+
+      // principais crescimentos (75% do incremento): mês à esquerda, YTD à direita
+      let endL = block(row, LC, "PRINCIPAIS CRESCIMENTOS — " + Math.round(PARETO * 100) + "% DO INCREMENTO — MÊS (" + mesLbl + ")", gTone, gM.list,
+        cap(mlabel(p0)), cap(mlabel(p1)) + " (Proj.)", (s) => s.v0, (s) => s.v1, (s) => s.dM, (s) => s.vM, (s) => (gM.tot > 0 ? s.dM / gM.tot : null));
+      let endR = hasYTD
+        ? block(row, RC, "PRINCIPAIS CRESCIMENTOS — " + Math.round(PARETO * 100) + "% DO INCREMENTO — YTD (" + ytdLbl + ")", gTone, gY.list,
+            "YTD " + (yProj - 1), "YTD " + yProj + " (Proj.)", (s) => s.yp, (s) => s.yc, (s) => s.dY, (s) => s.vY, (s) => (gY.tot > 0 ? s.dY / gY.tot : null))
+        : noYTD(row, RC, "PRINCIPAIS CRESCIMENTOS — " + Math.round(PARETO * 100) + "% DO INCREMENTO — YTD", gTone);
+      row = Math.max(endL, endR);
+      // top déficits: mês à esquerda, YTD à direita
+      endL = block(row, LC, "TOP " + TOPN + " DÉFICITS — MÊS (" + mesLbl + ")", dTone, defM,
+        cap(mlabel(p0)), cap(mlabel(p1)) + " (Proj.)", (s) => s.v0, (s) => s.v1, (s) => s.dM, (s) => s.vM, (s) => (negTotM > 0 ? -s.dM / negTotM : null));
+      endR = hasYTD
+        ? block(row, RC, "TOP " + TOPN + " DÉFICITS — YTD (" + ytdLbl + ")", dTone, defY,
+            "YTD " + (yProj - 1), "YTD " + yProj + " (Proj.)", (s) => s.yp, (s) => s.yc, (s) => s.dY, (s) => s.vY, (s) => (negTotY > 0 ? -s.dY / negTotY : null))
+        : noYTD(row, RC, "TOP " + TOPN + " DÉFICITS — YTD", dTone);
+      row = Math.max(endL, endR) + 1;
+    });
+
+    const fn = ws.getCell(row, 1);
+    fn.value = "Obs.: crescimentos ordenados pela Dif. absoluta; entram os itens que, somados, explicam " + Math.round(PARETO * 100) + "% do incremento total (corte de importância — quem pesa no resultado entra, mesmo com Var. % baixa; base pequena com % alto fica de fora se a Dif. não pesar). Déficits são os " + TOPN +
+               " itens com maior queda absoluta. % do Total = peso do item no incremento (ou déficit) somado da visão. Mês compara a projeção com o mesmo mês do ano anterior; YTD acumula janeiro até o mês projetado. Exclusões de marcas escolhidas na tela valem também aqui.";
+    fn.font = { name: "Calibri", size: 8.5, italic: true, color: A("808080") };
+    return { sheet: "Destaques" };
+  }
+
+  function buildWorkbook(ExcelJSlib, analyses, opts) {
     const wb = new ExcelJSlib.Workbook();
     wb.creator = "Painel de Projeção";
+    if (opts && opts.destaques) buildDestaques(wb, analyses); // aba resumo em primeiro, se habilitada
     const ordered = analyses.slice().sort((a, b) =>
       (entityRank(a.entity) - entityRank(b.entity)) ||
       ((a.kind === "un" ? 0 : 1) - (b.kind === "un" ? 0 : 1)));
-    const used = {};
+    const used = { "Destaques": (opts && opts.destaques) || false };
     ordered.forEach((a) => {
       let nm = a.sheetName.slice(0, 31).replace(/[\[\]:*?/\\]/g, "");
       if (used[nm]) { let i = 2; while (used[nm + " " + i]) i++; nm = (nm.slice(0, 28) + " " + i); }
@@ -487,7 +663,7 @@ button{font-family:inherit}
     return base + " (" + (kind === "un" ? "Un" : "R$") + ")";
   }
 
-  const API = { buildWorkbook, tabName, defaultPeriods };
+  const API = { buildWorkbook, buildDestaques, tabName, defaultPeriods };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   else global.XlsxBuild = API;
 })(typeof window !== "undefined" ? window : globalThis);
@@ -501,7 +677,7 @@ button{font-family:inherit}
   const mlabel = (p) => p == null ? "—" : MES[(p % 100) - 1] + "/" + String(Math.floor(p / 100)).slice(2);
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[m]));
-  const S = { files: [], gapOrder: "desc", colView: "month", excl: { nim: false, hix: false, ben: false, pen: false } }; // exclusões independentes: nim = NIMEGON/NIMEGON MET, hix = HIXIZINE, ben = BENZETACIL, pen = PEN-VE-ORAL
+  const S = { files: [], gapOrder: "desc", colView: "month", destaques: true, excl: { nim: false, hix: false, ben: false, pen: false } }; // exclusões independentes: nim = NIMEGON/NIMEGON MET, hix = HIXIZINE, ben = BENZETACIL, pen = PEN-VE-ORAL
   let uid = 0;
 
   // setor: nome curto (parte após " - ") e versão segura para nome de arquivo
@@ -587,6 +763,13 @@ button{font-family:inherit}
           </div>
         </div>
         <div class="orderbar">
+          <span class="orderlbl">Aba Destaques</span>
+          <div class="seg" role="group" aria-label="Aba de destaques (ranking de crescimento e déficits)">
+            <button type="button" class="segbtn${S.destaques ? " active" : ""}" data-dest="on">Incluir ranking</button>
+            <button type="button" class="segbtn${!S.destaques ? " active" : ""}" data-dest="off">Não incluir</button>
+          </div>
+        </div>
+        <div class="orderbar">
           <span class="orderlbl">Marcas</span>
           <div class="seg" role="group" aria-label="Filtro de marcas">
             <button type="button" class="segbtn${!(S.excl.nim || S.excl.hix || S.excl.ben || S.excl.pen) ? " active" : ""}" data-brands="all">Todas as marcas</button>
@@ -597,7 +780,7 @@ button{font-family:inherit}
           </div>
         </div>
         <button class="download" id="dl">${dlIcon()} ${nSet > 1 ? "Baixar " + nSet + " setores (.zip)" : "Baixar Excel organizado"}</button>
-        <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; o último mês é a projeção.</p>
+        <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; o último mês é a projeção.${S.destaques ? " A aba <b>Destaques</b> entra em primeiro com os itens que explicam <b>75% do incremento</b> e os 10 maiores déficits (mês e YTD) para Marcas, Cidades e Bricks." : ""}</p>
       </div>
       <div class="dropmini" id="drop">${upIcon()} arraste mais arquivos aqui</div>`;
     $("dl").onclick = download;
@@ -605,6 +788,7 @@ button{font-family:inherit}
     $("clearAll").onclick = () => { S.files = []; render(); toast("Planilhas removidas"); };
     app.querySelectorAll(".segbtn[data-order]").forEach((b) => (b.onclick = () => { if (S.gapOrder !== b.dataset.order) { S.gapOrder = b.dataset.order; render(); } }));
     app.querySelectorAll(".segbtn[data-cols]").forEach((b) => (b.onclick = () => { if (S.colView !== b.dataset.cols) { S.colView = b.dataset.cols; render(); } }));
+    app.querySelectorAll(".segbtn[data-dest]").forEach((b) => (b.onclick = () => { const on = b.dataset.dest === "on"; if (S.destaques !== on) { S.destaques = on; render(); } }));
     app.querySelectorAll(".segbtn[data-brands]").forEach((b) => (b.onclick = () => { if (S.excl.nim || S.excl.hix || S.excl.ben || S.excl.pen) { S.excl = { nim: false, hix: false, ben: false, pen: false }; render(); } }));
     app.querySelectorAll(".segbtn[data-excl]").forEach((b) => (b.onclick = () => { const k = b.dataset.excl; S.excl[k] = !S.excl[k]; render(); }));
     app.querySelectorAll(".rm").forEach((b) => (b.onclick = () => { S.files = S.files.filter((f) => f.id !== b.dataset.id); render(); }));
@@ -639,11 +823,11 @@ button{font-family:inherit}
       const SUFX = { nim: "NIM", hix: "HIX", ben: "BENZE", pen: "PENVE" };
       for (const [setor, files] of groups) {
         const analyses = files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data, gapOrder: S.gapOrder, extraCols: S.colView === "full", exclGroups }));
-        const wb = XlsxBuild.buildWorkbook(window.ExcelJS, analyses);
+        const wb = XlsxBuild.buildWorkbook(window.ExcelJS, analyses, { destaques: S.destaques });
         const buf = await wb.xlsx.writeBuffer();
         const nome = setor === "Consolidada" ? "Consolidada" : (safeName(setorShort(setor)) || safeName(setor));
         const sufixo = exclGroups.length ? "_sem_" + exclGroups.map((k) => SUFX[k]).join("_") : "";
-        built.push({ fname: "Projecao_" + nome + sufixo + ".xlsx", buf, tabs: analyses.length });
+        built.push({ fname: "Projecao_" + nome + sufixo + ".xlsx", buf, tabs: wb.worksheets.length });
       }
 
       const XLSXMIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
