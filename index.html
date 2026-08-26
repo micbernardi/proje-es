@@ -179,7 +179,7 @@ button{font-family:inherit}
   const mfull  = (p) => MESF[(p % 100) - 1] + "/" + String(Math.floor(p / 100)).slice(2);
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   const clean = (s) => String(s).replace(/\s*\(SP0\)\s*$/i, "").trim();
-  // marcas excluíveis via seletores da UI (botões independentes; NIMEGON e NIMEGON MET no mesmo botão)
+  // grupos de marcas excluíveis (motor mantido; sem seletores na UI — nada é excluído por padrão)
   const EXCL_GROUPS = {
     nim: { lbl: "NIMEGON / NIMEGON MET", re: /^NIMEGON\b/ },
     hix: { lbl: "HIXIZINE", re: /^HIXIZINE\b/ },
@@ -677,7 +677,7 @@ button{font-family:inherit}
   const mlabel = (p) => p == null ? "—" : MES[(p % 100) - 1] + "/" + String(Math.floor(p / 100)).slice(2);
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[m]));
-  const S = { files: [], gapOrder: "desc", colView: "month", destaques: true, excl: { nim: false, hix: false, ben: false, pen: false } }; // exclusões independentes: nim = NIMEGON/NIMEGON MET, hix = HIXIZINE, ben = BENZETACIL, pen = PEN-VE-ORAL
+  const S = { files: [], gapOrder: "desc", colView: "month", destaques: true, excl: { nim: false, hix: false, ben: false, pen: false } }; // sem botões de marca na UI: tudo false = nenhuma marca excluída dos cálculos
   let uid = 0;
 
   // setor: nome curto (parte após " - ") e versão segura para nome de arquivo
@@ -769,16 +769,6 @@ button{font-family:inherit}
             <button type="button" class="segbtn${!S.destaques ? " active" : ""}" data-dest="off">Não incluir</button>
           </div>
         </div>
-        <div class="orderbar">
-          <span class="orderlbl">Marcas</span>
-          <div class="seg" role="group" aria-label="Filtro de marcas">
-            <button type="button" class="segbtn${!(S.excl.nim || S.excl.hix || S.excl.ben || S.excl.pen) ? " active" : ""}" data-brands="all">Todas as marcas</button>
-            <button type="button" class="segbtn${S.excl.nim ? " active" : ""}" data-excl="nim" aria-pressed="${S.excl.nim}">Sem NIMEGON / NIMEGON MET</button>
-            <button type="button" class="segbtn${S.excl.hix ? " active" : ""}" data-excl="hix" aria-pressed="${S.excl.hix}">Sem HIXIZINE</button>
-            <button type="button" class="segbtn${S.excl.ben ? " active" : ""}" data-excl="ben" aria-pressed="${S.excl.ben}">Sem BENZETACIL</button>
-            <button type="button" class="segbtn${S.excl.pen ? " active" : ""}" data-excl="pen" aria-pressed="${S.excl.pen}">Sem PEN-VE-ORAL</button>
-          </div>
-        </div>
         <button class="download" id="dl">${dlIcon()} ${nSet > 1 ? "Baixar " + nSet + " setores (.zip)" : "Baixar Excel organizado"}</button>
         <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; o último mês é a projeção.${S.destaques ? " A aba <b>Destaques</b> entra em primeiro com os itens que explicam <b>75% do incremento</b> e os 10 maiores déficits (mês e YTD) para Marcas, Cidades e Bricks." : ""}</p>
       </div>
@@ -789,8 +779,6 @@ button{font-family:inherit}
     app.querySelectorAll(".segbtn[data-order]").forEach((b) => (b.onclick = () => { if (S.gapOrder !== b.dataset.order) { S.gapOrder = b.dataset.order; render(); } }));
     app.querySelectorAll(".segbtn[data-cols]").forEach((b) => (b.onclick = () => { if (S.colView !== b.dataset.cols) { S.colView = b.dataset.cols; render(); } }));
     app.querySelectorAll(".segbtn[data-dest]").forEach((b) => (b.onclick = () => { const on = b.dataset.dest === "on"; if (S.destaques !== on) { S.destaques = on; render(); } }));
-    app.querySelectorAll(".segbtn[data-brands]").forEach((b) => (b.onclick = () => { if (S.excl.nim || S.excl.hix || S.excl.ben || S.excl.pen) { S.excl = { nim: false, hix: false, ben: false, pen: false }; render(); } }));
-    app.querySelectorAll(".segbtn[data-excl]").forEach((b) => (b.onclick = () => { const k = b.dataset.excl; S.excl[k] = !S.excl[k]; render(); }));
     app.querySelectorAll(".rm").forEach((b) => (b.onclick = () => { S.files = S.files.filter((f) => f.id !== b.dataset.id); render(); }));
     wireDrop($("drop"));
   }
