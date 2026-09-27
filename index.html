@@ -461,24 +461,56 @@ button{font-family:inherit}
     if (e === "CIDADE") return 1;
     if (/PDV/.test(e)) return 2;
     if (e === "BRICK") return 3;
+    const k = e.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (/^PROVEDOR/.test(k)) return 4;
+    if (/^APRESENTACAO/.test(k)) return 5;
     return 9;
   }
 
-  /* Aba "Destaques" (opcional): por visão (Marcas, Cidades, Bricks), lista os itens que
+  /* rótulos das visões na aba Destaques — qualquer entidade baixada entra
+     (Marca, Cidade, PDV, Brick, Provedor, Apresentação, ...) */
+  const stripA = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  function entKeyOf(entity) { return stripA(entity).trim().toUpperCase(); }
+  function entHeadOf(entity) {
+    const raw = String(entity || "Item").trim(), k = entKeyOf(raw);
+    if (/PDV/.test(k)) return "PDV";
+    return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+  }
+  function pluralPT(w) {
+    const u = w.toUpperCase();
+    if (/ÇÃO$/.test(u)) return u.replace(/ÇÃO$/, "ÇÕES");
+    if (/ÃO$/.test(u)) return u.replace(/ÃO$/, "ÕES");
+    if (/[RZS]$/.test(u)) return /S$/.test(u) ? u : u + "ES";
+    if (/AL$|EL$|OL$|UL$/.test(u)) return u.slice(0, -1) + "IS";
+    if (/M$/.test(u)) return u.slice(0, -1) + "NS";
+    return u + "S";
+  }
+  function entLblOf(entity) {
+    const k = entKeyOf(entity);
+    if (/PDV/.test(k)) return "PDVS";
+    const raw = String(entity || "Item").trim();
+    // pluraliza só a primeira palavra ("Apresentação Produto" -> "APRESENTAÇÕES PRODUTO")
+    const parts = raw.split(/\s+/);
+    parts[0] = pluralPT(parts[0]);
+    return parts.map((x) => x.toUpperCase()).join(" ");
+  }
+
+  /* Aba "Destaques" (opcional): para CADA visão baixada (Marcas, Cidades, PDVs, Bricks,
+     Provedores, Apresentações...), lista os itens que
      explicam 75% do incremento total (corte de importância, estilo curva A) e os 10 maiores
      déficits, no mês (p1 vs p0) e no YTD projetado, sempre com a participação no total. */
   function buildDestaques(wb, analyses) {
     const PARETO = 0.75; // corte de importância: itens que somados explicam 75% do incremento
     const TOPN = 10;     // maiores déficits
-    const entLbls = { MARCA: "MARCAS", CIDADE: "CIDADES", BRICK: "BRICKS" };
-    const pick = analyses.filter((a) => entLbls[String(a.entity || "").trim().toUpperCase()]);
+    const pick = analyses.filter((a) => a && a.data && Object.keys(a.data).length);
     if (!pick.length) return null;
     const ordered = pick.slice().sort((a, b) =>
       (entityRank(a.entity) - entityRank(b.entity)) ||
+      entKeyOf(a.entity).localeCompare(entKeyOf(b.entity)) ||
       ((a.kind === "un" ? 0 : 1) - (b.kind === "un" ? 0 : 1)));
     const ws = wb.addWorksheet("Destaques", { views: [{ showGridLines: false }] });
     const W = 7, LC = 1, RC = 9, ENDC = RC + W - 1; // dois blocos lado a lado: A-G e I-O
-    [4, 34, 14, 14, 14, 9, 9, 2, 4, 34, 14, 14, 14, 9, 9].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+    [4, 44, 14, 14, 14, 9, 9, 2, 4, 44, 14, 14, 14, 9, 9].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
     const paint = (c, val) => {
       const f = val > 0 ? T.green : val < 0 ? T.red : "EEF1F5";
       const fg = val > 0 ? T.greenfg : val < 0 ? T.redfg : "5B6573";
@@ -503,9 +535,8 @@ button{font-family:inherit}
       const VAL = isUn ? "#,##0" : '"R$" #,##0.00';
       const DLT = isUn ? "+#,##0;-#,##0;0" : '"R$" +#,##0.00;"R$" -#,##0.00;0';
       const PCT = "+0.0%;-0.0%;0.0%";
-      const entKey = String(a.entity || "").trim().toUpperCase();
-      const entLbl = entLbls[entKey];
-      const entHead = entKey === "MARCA" ? "Marca" : entKey === "CIDADE" ? "Cidade" : "Brick";
+      const entLbl = entLblOf(a.entity);
+      const entHead = entHeadOf(a.entity);
       // mesmas exclusões de marcas da aba principal
       let items = Object.keys(a.data);
       const groups = (Array.isArray(a.exclGroups) ? a.exclGroups : (a.exclBrands ? ["nim", "hix"] : [])).filter((g) => EXCL_GROUPS[g]);
@@ -770,7 +801,7 @@ button{font-family:inherit}
           </div>
         </div>
         <button class="download" id="dl">${dlIcon()} ${nSet > 1 ? "Baixar " + nSet + " setores (.zip)" : "Baixar Excel organizado"}</button>
-        <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; o último mês é a projeção.${S.destaques ? " A aba <b>Destaques</b> entra em primeiro com os itens que explicam <b>75% do incremento</b> e os 10 maiores déficits (mês e YTD) para Marcas, Cidades e Bricks." : ""}</p>
+        <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; o último mês é a projeção.${S.destaques ? " A aba <b>Destaques</b> entra em primeiro com os itens que explicam <b>75% do incremento</b> e os 10 maiores déficits (mês e YTD) para <b>todas as visões carregadas</b> (Marcas, Cidades, PDVs, Bricks, Provedores, Apresentações…)." : ""}</p>
       </div>
       <div class="dropmini" id="drop">${upIcon()} arraste mais arquivos aqui</div>`;
     $("dl").onclick = download;
