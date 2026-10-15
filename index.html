@@ -76,6 +76,10 @@ button{font-family:inherit}
 .segbtn{appearance:none;border:none;background:transparent;color:var(--muted);font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:7px;cursor:pointer;transition:.12s}
 .segbtn:hover{color:var(--navy-700)}
 .segbtn.active{background:var(--navy-600);color:#fff;box-shadow:0 1px 2px rgba(15,37,64,.15)}
+.refsel{appearance:none;-webkit-appearance:none;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--navy-700);background:#F1F3F7 url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%231B3A5F' stroke-width='2.5'><path d='M6 9l6 6 6-6'/></svg>") no-repeat right 10px center;border:1px solid var(--line-strong);border-radius:9px;padding:8px 30px 8px 13px;cursor:pointer}
+.refsel:hover{border-color:var(--navy-700)}
+.refnote{font-size:12px;color:var(--muted)}
+.refnote b{color:#8A5A00}
 
 .dropmini{margin-top:14px;border:1.5px dashed var(--line-strong);border-radius:12px;padding:14px;text-align:center;color:var(--faint);font-size:12.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:.15s}
 .dropmini.over{border-color:var(--gold);background:#FFFDF6;color:var(--gold-deep)}
@@ -210,16 +214,26 @@ button{font-family:inherit}
     cell.border = b;
   }
 
-  function defaultPeriods(periods) {
-    const p1 = periods[periods.length - 1];
-    let p0 = periods.includes(p1 - 100) ? p1 - 100
-           : (periods.length > 12 ? periods[periods.indexOf(p1) - 12] : periods[0]);
-    if (p0 === p1 && periods.length > 1) p0 = periods[periods.length - 2];
+  // mês de referência (p1): o último disponível ou, se informado, o último <= ref.
+  // p0 = mesmo mês do ano anterior (ou 12 posições antes / primeiro período).
+  function defaultPeriods(periods, ref) {
+    let p1 = periods[periods.length - 1];
+    if (ref != null) { const le = periods.filter((p) => p <= ref); if (le.length) p1 = le[le.length - 1]; }
+    const i1 = periods.indexOf(p1);
+    let p0 = periods.includes(p1 - 100) ? p1 - 100 : (i1 >= 12 ? periods[i1 - 12] : periods[0]);
+    if (p0 === p1 && i1 > 0) p0 = periods[i1 - 1];
     return { p0, p1 };
+  }
+  // períodos da planilha: tudo até o mês de referência (meses depois dele ficam fora)
+  function scopePeriods(all, ref) {
+    const lastAvail = all[all.length - 1];
+    const periods = ref != null ? all.filter((p) => p <= ref) : all;
+    return { periods: periods.length ? periods : all, lastAvail };
   }
 
   function buildSheet(wb, a) {
-    const periods = a.periods.filter((p) => Math.floor(p / 100) >= 2025), data = a.data, kind = a.kind;
+    const allP = a.periods.filter((p) => Math.floor(p / 100) >= 2025), data = a.data, kind = a.kind;
+    const { periods, lastAvail } = scopePeriods(allP, a.refPeriod);
     const ws = wb.addWorksheet(a.sheetName, { views: [{ state:"frozen", xSplit:5, ySplit:5, showGridLines:false }] });
     let items = Object.keys(data);
     // grupos de exclusão ativos (exclGroups: ["nim","hix","ben","pen"]); exclBrands legado equivale a ["nim","hix"]
@@ -230,6 +244,10 @@ button{font-family:inherit}
     if (excl) items = items.filter((m) => !isExcl(m));
     const exclLbl = hit.map((g) => EXCL_GROUPS[g].lbl).join("; ");
     const { p0, p1 } = defaultPeriods(periods);
+    // mês de referência = último disponível → projeção; mês anterior escolhido na tela → realizado (fechado)
+    const isProj = p1 === lastAvail;
+    const refTag = isProj ? "(Proj.)" : "(Real.)";
+    const refWord = isProj ? "projeção" : "realizado";
 
     const isUn = kind === "un";
     const prep = isUn ? (v) => Math.floor(v + 0.5) : (v) => Math.round(v * 100) / 100;
@@ -285,8 +303,11 @@ button{font-family:inherit}
     // row 2 subtitle
     ws.mergeCells(2, 1, 2, ENDCOL);
     const s = ws.getCell(2, 1);
-    s.value = cap(mfull(p1).toLowerCase()) + " = projeção  •  demais meses = realizado  •  valores em " + metricSub +
-              "   |   Dif. e Var. % comparam " + mlabel(p1) + " vs " + mlabel(p0) + ":  verde = projeta mais, vermelho = menos" +
+    s.value = (isProj
+                ? cap(mfull(p1).toLowerCase()) + " = projeção  •  demais meses = realizado"
+                : cap(mfull(p1).toLowerCase()) + " = mês de referência (realizado)  •  meses após " + mlabel(p1) + " ficam fora desta visão") +
+              "  •  valores em " + metricSub +
+              "   |   Dif. e Var. % comparam " + mlabel(p1) + " vs " + mlabel(p0) + (isProj ? ":  verde = projeta mais, vermelho = menos" : ":  verde = cresceu, vermelho = caiu") +
               (excl ? "   |   SEM " + exclLbl : "");
     s.font = { name:"Calibri", size:9, italic:true, color:A("404040") };
     s.alignment = { horizontal:"left", vertical:"middle", indent:1 }; ws.getRow(2).height = 16;
@@ -310,7 +331,7 @@ button{font-family:inherit}
     });
     ws.getRow(3).height = 16;
     // row 4 detail headers
-    const det = { 2: cap(mlabel(p0)), 3: cap(mlabel(p1)) + "\n(Proj.)", 4: "Dif.\n(" + unit + ")", 5: "Var.\n%" };
+    const det = { 2: cap(mlabel(p0)), 3: cap(mlabel(p1)) + "\n" + refTag, 4: "Dif.\n(" + unit + ")", 5: "Var.\n%" };
     [2,3,4,5].forEach((col) => {
       const c = ws.getCell(4, col); c.value = det[col];
       c.font = { name:"Calibri", size:9, bold:true, color:A(T.detfg) }; c.fill = fill(T.det);
@@ -329,7 +350,7 @@ button{font-family:inherit}
     if (extra && ENDCOL > LAST) {
       if (ENDCOL > LAST + 1) ws.mergeCells(3, LAST + 1, 3, ENDCOL);
       const gh = ws.getCell(3, LAST + 1);
-      gh.value = "PROJETADO — " + (yProj % 100) + " vs " + ((yProj - 1) % 100);
+      gh.value = (isProj ? "PROJETADO — " : "ACUMULADO — ") + (yProj % 100) + " vs " + ((yProj - 1) % 100);
       gh.font = { name:"Calibri", size:10, bold:true, color:A("FFFFFF") }; gh.fill = fill(T.navy);
       gh.alignment = { horizontal:"center", vertical:"middle" };
       const mUp = mlabel(p1).toUpperCase();
@@ -445,12 +466,12 @@ button{font-family:inherit}
                (excl ? "  Marcas excluídas dos cálculos: " + exclLbl + "." : "") +
                (ws.autoFilter ? "  Filtro: use a seta na coluna " + entHead + " (linha 4) e digite nome ou CNPJ na busca; ao filtrar, a linha TOTAL GERAL fica oculta até limpar o filtro." : "") +
                (extra && ENDCOL > LAST
-                 ? "  Bloco PROJETADO: Evol. YTD compara jan a " + mlabel(p1) + " de " + yProj + " vs " + (yProj - 1) +
+                 ? "  Bloco " + (isProj ? "PROJETADO" : "ACUMULADO") + ": Evol. YTD compara jan a " + mlabel(p1) + " de " + yProj + " vs " + (yProj - 1) +
                    "; Dif. YTD é o acumulado em " + unit + "; Evol. TRI compara os 3 meses até " + mlabel(p1) +
-                   " de " + yProj + " vs " + (yProj - 1) + " (o mês projetado entra no acumulado)."
+                   " de " + yProj + " vs " + (yProj - 1) + " (o mês de referência, " + mlabel(p1) + " = " + refWord + ", entra no acumulado)."
                  : "");
     fn.font = { name:"Calibri", size:8.5, italic:true, color:A("808080") };
-    return { sheet: a.sheetName, items: items.length, p0, p1 };
+    return { sheet: a.sheetName, items: items.length, p0, p1, isProj };
   }
 
   function colLetter(n) { let s = ""; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = (n - r - 1) / 26; } return s; }
@@ -517,6 +538,7 @@ button{font-family:inherit}
       c.font = { name: "Calibri", size: 9.5, bold: true, color: A(fg) }; c.fill = fill(f);
     };
     const setorSh = (() => { const s = ordered[0].setor; return s ? s.split(" - ").slice(-1)[0].trim() : ""; })();
+    let anyReal = false; // alguma visão com mês de referência realizado (escolhido na tela)
 
     let row = 1;
     ws.mergeCells(row, 1, row, ENDC);
@@ -527,9 +549,11 @@ button{font-family:inherit}
     row += 2;
 
     ordered.forEach((a) => {
-      const periods = a.periods.filter((p) => Math.floor(p / 100) >= 2025);
+      const { periods, lastAvail } = scopePeriods(a.periods.filter((p) => Math.floor(p / 100) >= 2025), a.refPeriod);
       if (periods.length < 2) return;
       const { p0, p1 } = defaultPeriods(periods);
+      const isProj = p1 === lastAvail, refTag = isProj ? "(Proj.)" : "(Real.)";
+      anyReal = anyReal || !isProj;
       const isUn = a.kind === "un";
       const prep = isUn ? (v) => Math.floor(v + 0.5) : (v) => Math.round(v * 100) / 100;
       const VAL = isUn ? "#,##0" : '"R$" #,##0.00';
@@ -584,7 +608,7 @@ button{font-family:inherit}
       row++;
       ws.mergeCells(row, 1, row, ENDC);
       const ss = ws.getCell(row, 1);
-      ss.value = "Mês: " + mesLbl + " (" + mlabel(p1) + " = projeção)" + (hasYTD ? "   |   YTD: " + ytdLbl + " (mês projetado entra no acumulado)" : "") + "   |   % do Total = peso do item no incremento (ou déficit) somado";
+      ss.value = "Mês: " + mesLbl + " (" + mlabel(p1) + " = " + (isProj ? "projeção" : "realizado") + ")" + (hasYTD ? "   |   YTD: " + ytdLbl + " (" + mlabel(p1) + " entra no acumulado)" : "") + "   |   % do Total = peso do item no incremento (ou déficit) somado";
       ss.font = { name: "Calibri", size: 8.5, italic: true, color: A("404040") };
       ss.alignment = { horizontal: "left", vertical: "middle", indent: 1 };
       row++;
@@ -647,25 +671,25 @@ button{font-family:inherit}
 
       // principais crescimentos (75% do incremento): mês à esquerda, YTD à direita
       let endL = block(row, LC, "PRINCIPAIS CRESCIMENTOS — " + Math.round(PARETO * 100) + "% DO INCREMENTO — MÊS (" + mesLbl + ")", gTone, gM.list,
-        cap(mlabel(p0)), cap(mlabel(p1)) + " (Proj.)", (s) => s.v0, (s) => s.v1, (s) => s.dM, (s) => s.vM, (s) => (gM.tot > 0 ? s.dM / gM.tot : null));
+        cap(mlabel(p0)), cap(mlabel(p1)) + " " + refTag, (s) => s.v0, (s) => s.v1, (s) => s.dM, (s) => s.vM, (s) => (gM.tot > 0 ? s.dM / gM.tot : null));
       let endR = hasYTD
         ? block(row, RC, "PRINCIPAIS CRESCIMENTOS — " + Math.round(PARETO * 100) + "% DO INCREMENTO — YTD (" + ytdLbl + ")", gTone, gY.list,
-            "YTD " + (yProj - 1), "YTD " + yProj + " (Proj.)", (s) => s.yp, (s) => s.yc, (s) => s.dY, (s) => s.vY, (s) => (gY.tot > 0 ? s.dY / gY.tot : null))
+            "YTD " + (yProj - 1), "YTD " + yProj + " " + refTag, (s) => s.yp, (s) => s.yc, (s) => s.dY, (s) => s.vY, (s) => (gY.tot > 0 ? s.dY / gY.tot : null))
         : noYTD(row, RC, "PRINCIPAIS CRESCIMENTOS — " + Math.round(PARETO * 100) + "% DO INCREMENTO — YTD", gTone);
       row = Math.max(endL, endR);
       // top déficits: mês à esquerda, YTD à direita
       endL = block(row, LC, "TOP " + TOPN + " DÉFICITS — MÊS (" + mesLbl + ")", dTone, defM,
-        cap(mlabel(p0)), cap(mlabel(p1)) + " (Proj.)", (s) => s.v0, (s) => s.v1, (s) => s.dM, (s) => s.vM, (s) => (negTotM > 0 ? -s.dM / negTotM : null));
+        cap(mlabel(p0)), cap(mlabel(p1)) + " " + refTag, (s) => s.v0, (s) => s.v1, (s) => s.dM, (s) => s.vM, (s) => (negTotM > 0 ? -s.dM / negTotM : null));
       endR = hasYTD
         ? block(row, RC, "TOP " + TOPN + " DÉFICITS — YTD (" + ytdLbl + ")", dTone, defY,
-            "YTD " + (yProj - 1), "YTD " + yProj + " (Proj.)", (s) => s.yp, (s) => s.yc, (s) => s.dY, (s) => s.vY, (s) => (negTotY > 0 ? -s.dY / negTotY : null))
+            "YTD " + (yProj - 1), "YTD " + yProj + " " + refTag, (s) => s.yp, (s) => s.yc, (s) => s.dY, (s) => s.vY, (s) => (negTotY > 0 ? -s.dY / negTotY : null))
         : noYTD(row, RC, "TOP " + TOPN + " DÉFICITS — YTD", dTone);
       row = Math.max(endL, endR) + 1;
     });
 
     const fn = ws.getCell(row, 1);
     fn.value = "Obs.: crescimentos ordenados pela Dif. absoluta; entram os itens que, somados, explicam " + Math.round(PARETO * 100) + "% do incremento total (corte de importância — quem pesa no resultado entra, mesmo com Var. % baixa; base pequena com % alto fica de fora se a Dif. não pesar). Déficits são os " + TOPN +
-               " itens com maior queda absoluta. % do Total = peso do item no incremento (ou déficit) somado da visão. Mês compara a projeção com o mesmo mês do ano anterior; YTD acumula janeiro até o mês projetado. Exclusões de marcas escolhidas na tela valem também aqui.";
+               " itens com maior queda absoluta. % do Total = peso do item no incremento (ou déficit) somado da visão. Mês compara o mês de referência (" + (anyReal ? "realizado, escolhido na tela" : "projeção") + ") com o mesmo mês do ano anterior; YTD acumula janeiro até o mês de referência. Exclusões de marcas escolhidas na tela valem também aqui.";
     fn.font = { name: "Calibri", size: 8.5, italic: true, color: A("808080") };
     return { sheet: "Destaques" };
   }
@@ -694,7 +718,7 @@ button{font-family:inherit}
     return base + " (" + (kind === "un" ? "Un" : "R$") + ")";
   }
 
-  const API = { buildWorkbook, buildDestaques, tabName, defaultPeriods };
+  const API = { buildWorkbook, buildDestaques, tabName, defaultPeriods, scopePeriods };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   else global.XlsxBuild = API;
 })(typeof window !== "undefined" ? window : globalThis);
@@ -708,7 +732,7 @@ button{font-family:inherit}
   const mlabel = (p) => p == null ? "—" : MES[(p % 100) - 1] + "/" + String(Math.floor(p / 100)).slice(2);
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[m]));
-  const S = { files: [], gapOrder: "desc", colView: "month", destaques: true, excl: { nim: false, hix: false, ben: false, pen: false } }; // sem botões de marca na UI: tudo false = nenhuma marca excluída dos cálculos
+  const S = { files: [], gapOrder: "desc", colView: "month", destaques: true, refPeriod: null, excl: { nim: false, hix: false, ben: false, pen: false } }; // sem botões de marca na UI: tudo false = nenhuma marca excluída dos cálculos
   let uid = 0;
 
   // setor: nome curto (parte após " - ") e versão segura para nome de arquivo
@@ -762,6 +786,12 @@ button{font-family:inherit}
     const app = $("app");
     if (!S.files.length) { app.innerHTML = emptyHTML(); wireDrop($("drop")); return; }
     const nSet = new Set(S.files.map((f) => f.setor || "—")).size;
+    // meses disponíveis (união dos arquivos, a partir de 2025), do mais recente ao mais antigo
+    const avail = [...new Set(S.files.flatMap((f) => f.periods.filter((p) => Math.floor(p / 100) >= 2025)))].sort((a, b) => b - a);
+    const latest = avail[0];
+    if (S.refPeriod != null && !avail.includes(S.refPeriod)) S.refPeriod = null;
+    const refIsLatest = S.refPeriod == null || S.refPeriod === latest;
+    const refOpts = avail.slice(0, 13).map((p) => `<option value="${p}"${(S.refPeriod == null ? p === latest : p === S.refPeriod) ? " selected" : ""}>${mlabel(p)}${p === latest ? " · último (projeção)" : " · realizado"}</option>`).join("");
     const rows = S.files.map((f) => `
       <li class="frow" data-id="${f.id}">
         <span class="fi">${docIcon()}</span>
@@ -779,6 +809,11 @@ button{font-family:inherit}
             <button class="clearbtn" id="clearAll">Limpar tudo</button>
           </span></div>
         <ul class="flist">${rows}</ul>
+        <div class="orderbar">
+          <span class="orderlbl">Mês de referência</span>
+          <select class="refsel" id="refSel" aria-label="Mês de referência da comparação">${refOpts}</select>
+          <span class="refnote">${refIsLatest ? "último mês do arquivo = projeção" : "<b>" + mlabel(S.refPeriod) + " = realizado</b> · meses depois dele ficam fora da planilha"}</span>
+        </div>
         <div class="orderbar">
           <span class="orderlbl">Ordem por GAP</span>
           <div class="seg" role="group" aria-label="Ordem por GAP">
@@ -801,12 +836,13 @@ button{font-family:inherit}
           </div>
         </div>
         <button class="download" id="dl">${dlIcon()} ${nSet > 1 ? "Baixar " + nSet + " setores (.zip)" : "Baixar Excel organizado"}</button>
-        <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; o último mês é a projeção.${S.destaques ? " A aba <b>Destaques</b> entra em primeiro com os itens que explicam <b>75% do incremento</b> e os 10 maiores déficits (mês e YTD) para <b>todas as visões carregadas</b> (Marcas, Cidades, PDVs, Bricks, Provedores, Apresentações…)." : ""}</p>
+        <p class="hint2">Agrupado por setor: <b>um arquivo por setor</b>, cada visão numa aba. Vários setores saem num <b>.zip</b>. Tipo (unidades / R$) e categoria são lidos de cada arquivo; ${refIsLatest ? "o último mês é a projeção" : "a comparação (mês, YTD e trimestre) fecha em <b>" + mlabel(S.refPeriod) + "</b> como realizado"}.${S.destaques ? " A aba <b>Destaques</b> entra em primeiro com os itens que explicam <b>75% do incremento</b> e os 10 maiores déficits (mês e YTD) para <b>todas as visões carregadas</b> (Marcas, Cidades, PDVs, Bricks, Provedores, Apresentações…)." : ""}</p>
       </div>
       <div class="dropmini" id="drop">${upIcon()} arraste mais arquivos aqui</div>`;
     $("dl").onclick = download;
     $("addMore").onclick = () => $("file").click();
-    $("clearAll").onclick = () => { S.files = []; render(); toast("Planilhas removidas"); };
+    $("clearAll").onclick = () => { S.files = []; S.refPeriod = null; render(); toast("Planilhas removidas"); };
+    $("refSel").onchange = (e) => { const v = +e.target.value; S.refPeriod = v === latest ? null : v; render(); toast(S.refPeriod == null ? "Referência: último mês (projeção)" : "Referência: " + mlabel(S.refPeriod) + " (realizado)"); };
     app.querySelectorAll(".segbtn[data-order]").forEach((b) => (b.onclick = () => { if (S.gapOrder !== b.dataset.order) { S.gapOrder = b.dataset.order; render(); } }));
     app.querySelectorAll(".segbtn[data-cols]").forEach((b) => (b.onclick = () => { if (S.colView !== b.dataset.cols) { S.colView = b.dataset.cols; render(); } }));
     app.querySelectorAll(".segbtn[data-dest]").forEach((b) => (b.onclick = () => { const on = b.dataset.dest === "on"; if (S.destaques !== on) { S.destaques = on; render(); } }));
@@ -841,11 +877,12 @@ button{font-family:inherit}
       const exclGroups = ["nim", "hix", "ben", "pen"].filter((k) => S.excl[k]);
       const SUFX = { nim: "NIM", hix: "HIX", ben: "BENZE", pen: "PENVE" };
       for (const [setor, files] of groups) {
-        const analyses = files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data, gapOrder: S.gapOrder, extraCols: S.colView === "full", exclGroups }));
+        const analyses = files.map((f) => ({ sheetName: XlsxBuild.tabName(f.entity, f.metric), entity: f.entity, setor: f.setor, kind: f.metric, periods: f.periods, data: f.data, gapOrder: S.gapOrder, extraCols: S.colView === "full", exclGroups, refPeriod: S.refPeriod }));
         const wb = XlsxBuild.buildWorkbook(window.ExcelJS, analyses, { destaques: S.destaques });
         const buf = await wb.xlsx.writeBuffer();
         const nome = setor === "Consolidada" ? "Consolidada" : (safeName(setorShort(setor)) || safeName(setor));
-        const sufixo = exclGroups.length ? "_sem_" + exclGroups.map((k) => SUFX[k]).join("_") : "";
+        const refSfx = S.refPeriod != null ? "_" + mlabel(S.refPeriod).replace("/", "") : "";
+        const sufixo = refSfx + (exclGroups.length ? "_sem_" + exclGroups.map((k) => SUFX[k]).join("_") : "");
         built.push({ fname: "Projecao_" + nome + sufixo + ".xlsx", buf, tabs: wb.worksheets.length });
       }
 
